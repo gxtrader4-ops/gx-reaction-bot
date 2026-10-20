@@ -23,7 +23,7 @@ bot = telebot.TeleBot(TOKEN, parse_mode='Markdown')
 user_coins = {}
 banned_users = set()
 total_orders_count = 0
-group_setups = {}  # {chat_id: {"qty": quantity, "active": True}}
+group_setups = {}  # {chat_id: {"qty": quantity, "link": group_link, "active": True}}
 waiting_for_group_link = {}
 waiting_for_group_qty = {}
 waiting_for_screenshot = {}
@@ -43,15 +43,19 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# অফিশিয়াল পাইথন এপিআই কানেক্টর (পিএইচপি কোডের পাইথন ভার্সন)
+# অফিশিয়াল পাইথন এপিআই কানেক্টর
 def call_1xpanel_api(data):
     try:
         post_data = {'key': API_KEY}
         post_data.update(data)
         
-        response = requests.post(API_URL, data=post_data, timeout=15)
+        print(f"Sending API Request to 1XPanel: {post_data}")
+        response = requests.post(API_URL, data=post_data, timeout=20)
+        print(f"API Response Raw: {response.text}")
+        
         return response.json()
     except Exception as e:
+        print(f"API Connection Error: {e}")
         return {'error': str(e)}
 
 def user_main_keyboard():
@@ -132,43 +136,66 @@ def handle_admin_commands(message):
     except Exception as e:
         bot.reply_to(message, f"⚠️ সঠিক নিয়মে কমান্ড দিন:\nযেমন: `/addcoin [UserID] [Amount]` বা `/ban [UserID]`")
 
-@bot.message_handler(func=lambda message: True, content_types=['text', 'photo', 'video', 'document', 'audio'])
-def handle_all_incoming(message):
+# ১. গ্রুপে নতুন পোস্ট ডিটেক্ট করার জন্য ডেডিকেটেড হ্যান্ডলার
+@bot.message_handler(func=lambda message: message.chat.type in ['group', 'supergroup'], content_types=['text', 'photo', 'video', 'document', 'audio', 'animation', 'sticker'])
+def handle_group_posts(message):
     global total_orders_count
+    chat_id = message.chat.id
+    print(f"Group message received from Chat ID: {chat_id}")
+
+    # চেক করা এই গ্রুপটি সেটআপ করা আছে কি না
+    if chat_id in group_setups and group_setups[chat_id].get("active", False):
+        quantity = group_setups[chat_id].get("qty", 1000)
+
+        # পোস্টের পারফেক্ট লিংক তৈরি
+        if message.chat.username:
+            post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
+        else:
+            # প্রাইভেট বা সুপারগ্রুপের ক্ষেত্রে লিংক ফরম্যাট
+            clean_chat_id = str(chat_id).replace('-100', '')
+            post_link = f"https://t.me/c/{clean_chat_id}/{message.message_id}"
+        
+        print(f"Generated Post Link for API: {post_link} | Quantity: {quantity}")
+
+        # লগ গ্রুপে পেন্ডিং মেসেজ পাঠানো
+        try:
+            pending_msg = bot.send_message(LOG_GROUP_ID, f"⏳ **ORDER PENDING [1X PANEL]**\nGroup ID: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
+        except Exception as e:
+            print(f"Failed to send pending log: {e}")
+            pending_msg = None
+
+        # 1X Panel API Call (`action: add`)
+        api_response = call_1xpanel_api({
+            'action': 'add',
+            'service': REACTION_SERVICE_ID,
+            'link': post_link,
+            'quantity': quantity
+        })
+        total_orders_count += 1
+
+        try:
+            if isinstance(api_response, dict) and 'order' in api_response:
+                order_id = api_response['order']
+                success_text = f"🎉 **ORDER COMPLETED [1X PANEL]**\nOrder ID: `{order_id}`\nGroup ID: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`"
+                if pending_msg:
+                    bot.edit_message_text(success_text, chat_id=LOG_GROUP_ID, message_id=pending_msg.message_id)
+                else:
+                    bot.send_message(LOG_GROUP_ID, success_text)
+            else:
+                err_msg = api_response.get('error', 'Unknown Error') if isinstance(api_response, dict) else f'Response: {api_response}'
+                fail_text = f"⚠️ **ORDER FAILED [1X PANEL]**\nReason: `{err_msg}`\nGroup ID: `{chat_id}`\nLink: `{post_link}`"
+                if pending_msg:
+                    bot.edit_message_text(fail_text, chat_id=LOG_GROUP_ID, message_id=pending_msg.message_id)
+                else:
+                    bot.send_message(LOG_GROUP_ID, fail_text)
+        except Exception as e:
+            print(f"Error updating log group: {e}")
+
+# ২. প্রাইভেট চ্যাট ইউজার মেসেজ হ্যান্ডলার
+@bot.message_handler(func=lambda message: message.chat.type == 'private')
+def handle_private_messages(message):
     user_id = message.from_user.id
     if user_id in banned_users:
-        return
-
-    # ১. গ্রুপে নতুন পোস্ট আসলে 1X Panel API-তে অর্ডার পাঠানোর লজিক
-    if message.chat.type in ['group', 'supergroup']:
-        chat_id = message.chat.id
-        if chat_id in group_setups and group_setups[chat_id].get("active", False):
-            quantity = group_setups[chat_id].get("qty", 1000)
-
-            # পোস্টের পারফেক্ট লিংক তৈরি
-            if message.chat.username:
-                post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
-            else:
-                post_link = f"https://t.me/c/{str(chat_id).replace('-100', '')}/{message.message_id}"
-            
-            # 1X Panel API Call (`action: add`)
-            api_response = call_1xpanel_api({
-                'action': 'add',
-                'service': REACTION_SERVICE_ID,
-                'link': post_link,
-                'quantity': quantity
-            })
-            total_orders_count += 1
-
-            try:
-                if isinstance(api_response, dict) and 'order' in api_response:
-                    order_id = api_response['order']
-                    bot.send_message(LOG_GROUP_ID, f"🎉 **1X PANEL ORDER COMPLETED!**\nOrder ID: `{order_id}`\nGroup ID: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
-                else:
-                    err_msg = api_response.get('error', 'Unknown Error') if isinstance(api_response, dict) else 'API Response Error'
-                    bot.send_message(LOG_GROUP_ID, f"⚠️ **1X PANEL ORDER FAILED**\nReason: `{err_msg}`\nGroup ID: `{chat_id}`")
-            except Exception as e:
-                print(f"Log group error: {e}")
         return
 
     text = message.text if message.text else ""
@@ -201,9 +228,9 @@ def handle_all_incoming(message):
 
     # গ্রুপ লিংক ইনপুট হ্যান্ডলিং
     if user_id in waiting_for_group_link and waiting_for_group_link[user_id]:
-        group_link = text.strip()
+        group_input = text.strip()
         waiting_for_group_link[user_id] = False
-        waiting_for_group_qty[user_id] = group_link
+        waiting_for_group_qty[user_id] = group_input
 
         bot.reply_to(message, "🔢 আপনি প্রতি পোস্টে কত রিঅ্যাকশন নিতে চান? (যেমন: `1000` বা `5000`) সংখ্যাটি লিখে পাঠান:")
         return
@@ -212,19 +239,21 @@ def handle_all_incoming(message):
     if user_id in waiting_for_group_qty and waiting_for_group_qty[user_id]:
         try:
             qty = int(text.strip())
-            group_link = waiting_for_group_qty[user_id]
+            group_input = waiting_for_group_qty[user_id]
             waiting_for_group_qty[user_id] = None
 
-            # গ্রুপ চ্যাট আইডি সেটআপ
-            group_setups[message.chat.id] = {"qty": qty, "active": True}
+            # ইউজার যে গ্রুপে বট এডমিন দিছে এবং সেটআপ করতেছে, সেই চ্যাট আইডি রিকভার করার চেষ্টা
+            # অথবা বর্তমান চ্যাটে সেটআপ সেভ করা
+            target_chat_id = message.chat.id # অথবা গ্রুপ আইডি যদি ইউজার চ্যাটে দেয়
+            group_setups[target_chat_id] = {"qty": qty, "link": group_input, "active": True}
 
             bot.reply_to(
                 message, 
                 f"✅ **অটো-রিঅ্যাকশন সফলভাবে সেটআপ হয়ে গেছে!**\n\n"
-                f"📢 গ্রুপ: `{group_link}`\n"
+                f"📢 গ্রুপ/চ্যানেল: `{group_input}`\n"
                 f"🔢 রিঅ্যাকশন পরিমাণ: `{qty}`\n"
                 f"⚙️ স্ট্যাটাস: `Active`\n\n"
-                f"এখন এই গ্রুপে পোস্ট করলেই 1X Panel থেকে অটো রিঅ্যাকশন চলে যাবে!"
+                f"এখন আপনার গ্রুপে পোস্ট করলেই 1X Panel থেকে অটো রিঅ্যাকশন চলে যাবে!"
             )
         except ValueError:
             bot.reply_to(message, "⚠️ দয়া করে একটি সঠিক সংখ্যা লিখুন (যেমন: `1000` বা `5000`)।")
@@ -287,7 +316,7 @@ def callback_handlers(call):
     elif data == "one_click_setup":
         waiting_for_group_link[user_id] = True
         bot.answer_callback_query(call.id, "Setup started")
-        bot.send_message(chat_id, "📢 আপনার পাবলিক গ্রুপের লিংক পাঠান (যেমন: `@YourGroupName`):")
+        bot.send_message(chat_id, "📢 আপনার পাবলিক গ্রুপের লিংক বা ইউজারনেম পাঠান (যেমন: `@YourGroupName`):")
 
 if __name__ == '__main__':
     keep_alive()
