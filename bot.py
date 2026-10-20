@@ -9,10 +9,10 @@ import telebot
 from telebot import types
 
 TOKEN = '8328274170:AAFrNNK1tapx67WjaADQUXjmRc9wbPSDZ1w'
-ADMIN_IDS = [8419760844]  # আপনার সঠিক এডমিন আইডি (শেষের অংশ 844)
+ADMIN_IDS = [8419760844]  # আপনার সঠিক এডমিন আইডি
 LOG_GROUP_ID = -1004452564086
 
-# গ্লোবাল কনফিগারেশন (এডমিন প্যানেল থেকে পরিবর্তনযোগ্য)
+# গ্লোবাল কনফিগারেশন
 bot_config = {
     "binance_uid": "1122595327",
     "reaction_service_id": 1936
@@ -27,10 +27,9 @@ bot = telebot.TeleBot(TOKEN, parse_mode='Markdown')
 user_coins = {}
 banned_users = set()
 total_orders_count = 0
-auto_reaction_status = {}  # {chat_id: True/False}
-chat_reaction_quantities = {}  # {chat_id: quantity}
-waiting_for_channel = {}
-waiting_for_quantity = {}
+group_setups = {}  # {chat_id: {"link": group_link, "qty": quantity, "active": True}}
+waiting_for_group_link = {}
+waiting_for_group_qty = {}
 waiting_for_screenshot = {}
 waiting_for_binance_change = {}
 
@@ -38,7 +37,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "GX Team Auto-Reaction & SMM Bot is running 24/7!"
+    return "GX Team Auto-Reaction Bot is running 24/7!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -66,7 +65,6 @@ def user_main_keyboard():
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(
         types.KeyboardButton('🚀 Telegram React + View'),
-        types.KeyboardButton('⚡ Auto Reaction Control'),
         types.KeyboardButton('💰 My Wallet & Coins'),
         types.KeyboardButton('💳 Topup (Binance Pay)'),
         types.KeyboardButton('📞 Support & Help')
@@ -91,15 +89,19 @@ def send_welcome(message):
         return
 
     if user_id not in user_coins:
-        user_coins[user_id] = 100000  # শুরুর জন্য ফ্রি কয়েন উপহার
+        user_coins[user_id] = 10000  # ফ্রি কয়েন
 
     if user_id in ADMIN_IDS:
-        bot.send_message(message.chat.id, "👑 **WELCOME ADMIN (নিরব ভাই)**\n\nআপনার ফুল অটো-রিঅ্যাকশন বট ফুল্লি লাইভ আছে!", reply_markup=admin_main_keyboard())
+        bot.send_message(
+            message.chat.id, 
+            "👑 **WELCOME ADMIN (নিরব ভাই)**\n\nআপনার ফুল অটো-রিঅ্যাকশন প্যানেল বট ফুল্লি লাইভ আছে!", 
+            reply_markup=admin_main_keyboard()
+        )
     else:
         bot.send_message(
             message.chat.id, 
-            "💎 **GX TEAM VIP AUTO-REACTION BOT**\n\n"
-            "স্বাগতম! যেকোনো গ্রুপে বটকে এডমিন দিয়ে নিচের মেনু থেকে অটো-রিঅ্যাকশন সেটআপ করুন:", 
+            "💎 **GX TEAM VIP AUTO-REACTION PANEL**\n\n"
+            "স্বাগতম! নিচের মেনু থেকে অটো-রিঅ্যাকশন সেটআপ করুন:", 
             reply_markup=user_main_keyboard()
         )
 
@@ -144,19 +146,17 @@ def handle_all_incoming(message):
     if user_id in banned_users:
         return
 
-    # ১. যদি গ্রুপে কোনো নতুন পোস্ট/মেসেজ আসে এবং অটো-রিঅ্যাকশন ON থাকে
+    # ১. গ্রুপে নতুন পোস্ট আসলে অটো রিঅ্যাকশন পাঠানোর লজিক
     if message.chat.type in ['group', 'supergroup']:
         chat_id = message.chat.id
-        if auto_reaction_status.get(chat_id, False):
-            # পোস্টের পারফেক্ট লিংক তৈরি (পাবলিক বা প্রাইভেট চ্যানেলের ক্ষেত্রে)
+        if chat_id in group_setups and group_setups[chat_id].get("active", False):
             if message.chat.username:
                 post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
             else:
                 post_link = f"https://t.me/c/{str(chat_id).replace('-100', '')}/{message.message_id}"
             
-            quantity = chat_reaction_quantities.get(chat_id, 100)
+            quantity = group_setups[chat_id].get("qty", 100)
             
-            # এসমিএম অর্ডার পাঠানো
             api_response = send_smm_order(post_link, quantity)
             total_orders_count += 1
 
@@ -169,10 +169,9 @@ def handle_all_incoming(message):
                 pass
         return
 
-    # ২. প্রাইভেট চ্যাট ইউজার টেক্সট হ্যান্ডলিং
     text = message.text if message.text else ""
 
-    # বাইনান্স ইউআইডি পরিবর্তন (এডমিন)
+    # অ্যাডমিন বাইনান্স ইউআইডি পরিবর্তন
     if user_id in ADMIN_IDS and waiting_for_binance_change.get(user_id, False):
         bot_config["binance_uid"] = text.strip()
         waiting_for_binance_change[user_id] = False
@@ -205,21 +204,37 @@ def handle_all_incoming(message):
             waiting_for_screenshot[user_id] = False
             return
 
-    # রিঅ্যাকশন পরিমাণ ইনপুট
-    if user_id in waiting_for_quantity and waiting_for_quantity[user_id]:
+    # গ্রুপ লিংক ইনপুট হ্যান্ডলিং
+    if user_id in waiting_for_group_link and waiting_for_group_link[user_id]:
+        group_link = text.strip()
+        waiting_for_group_link[user_id] = False
+        waiting_for_group_qty[user_id] = group_link  # সাময়িক সেভ রাখা হলো
+
+        bot.reply_to(message, "🔢 আপনি এই গ্রুপে প্রতি পোস্টে কতটি রিঅ্যাকশন নিতে চান? সংখ্যাটি লিখে পাঠান (যেমন: `150`):")
+        return
+
+    # রিঅ্যাকশন পরিমাণ ইনপুট হ্যান্ডলিং (সেটআপ সম্পন্ন)
+    if user_id in waiting_for_group_qty and waiting_for_group_qty[user_id]:
         try:
             qty = int(text.strip())
-            chat_to_set = waiting_for_quantity[user_id]
-            chat_reaction_quantities[chat_to_set] = qty
-            waiting_for_quantity[user_id] = False
-            bot.reply_to(message, f"✅ সফলভাবে রিঅ্যাকশনের পরিমাণ `{qty}` সেট করা হয়েছে!")
+            group_link = waiting_for_group_qty[user_id]
+            waiting_for_group_qty[user_id] = None
+
+            # ইউজারকে সাকসেস মেসেজ দেওয়া
+            bot.reply_to(
+                message, 
+                f"✅ **অটো-রিঅ্যাকশন সফলভাবে সেটআপ হয়ে গেছে!**\n\n"
+                f"📢 গ্রুপ/চ্যানেল: `{group_link}`\n"
+                f"🔢 রিঅ্যাকশন পরিমাণ: `{qty}`\n\n"
+                f"এখন এই গ্রুপে পোস্ট করলেই অটো রিঅ্যাকশন চলে যাবে!"
+            )
         except ValueError:
-            bot.reply_to(message, "⚠️ দয়া করে একটি সঠিক সংখ্যা লিখুন (যেমন: `100` বা `500`)।")
+            bot.reply_to(message, "⚠️ দয়া করে একটি সঠিক সংখ্যা লিখুন (যেমন: `100` বা `200`)।")
         return
 
     if text == '💰 My Wallet & Coins':
         coins = user_coins.get(user_id, 0)
-        bot.reply_to(message, f"💰 **MY WALLET & COINS**\n\n🆔 User ID: `{user_id}`\n🪙 Total Coins: `{coins} Coins`\n\n_(১ ডলারে ৫০০০ কয়েন প্যাক চালু আছে)_")
+        bot.reply_to(message, f"💰 **MY WALLET & COINS**\n\n🆔 User ID: `{user_id}`\n🪙 Total Coins: `{coins} Coins`")
     
     elif text == '💳 Topup (Binance Pay)':
         markup = types.InlineKeyboardMarkup(row_width=1)
@@ -239,26 +254,13 @@ def handle_all_incoming(message):
     
     elif text == '🚀 Telegram React + View':
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("⚙️ Setup Auto-Reaction in Group", callback_data="setup_group_guide"),
-            types.InlineKeyboardButton("🔙 Back to Home", callback_data="back_home")
-        )
+        markup.add(types.InlineKeyboardButton("🔗 Telegram Reaction One-Click Setup", callback_data="one_click_setup"))
         bot.reply_to(
             message, 
             "📌 **TELEGRAM AUTO-REACTION SETUP**\n\n"
-            "১. প্রথমে আপনার গ্রুপে বটকে **Admin** দিন।\n"
-            "২. নিচের বাটনে ক্লিক করে অটো-রিঅ্যাকশন কনফিগার করুন।", 
+            "নিচের বাটনে ক্লিক করে এক ক্লিকে আপনার গ্রুপ সেটআপ করুন:", 
             reply_markup=markup
         )
-    
-    elif text == '⚡ Auto Reaction Control':
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🟢 Turn ON", callback_data="react_on"),
-            types.InlineKeyboardButton("🔴 Turn OFF", callback_data="react_off"),
-            types.InlineKeyboardButton("📊 Check Status", callback_data="react_status")
-        )
-        bot.reply_to(message, "⚙️ **AUTO REACTION CONTROL PANEL**\n\nআপনার গ্রুপের অটো-রিঅ্যাকশন সিস্টেম এখান থেকে অন বা অফ করুন:", reply_markup=markup)
     
     elif text == '⚙️ Admin Dashboard' and user_id in ADMIN_IDS:
         bot.reply_to(message, f"👑 **ADMIN PANEL**\n\n📊 Total Orders: `{total_orders_count}`\n👥 Total Users: `{len(user_coins)}`\n💳 Current Binance UID: `{bot_config['binance_uid']}`", reply_markup=admin_main_keyboard())
@@ -286,46 +288,12 @@ def callback_handlers(call):
     if data == "send_screenshot":
         waiting_for_screenshot[user_id] = True
         bot.answer_callback_query(call.id, "Send screenshot")
-        bot.send_message(chat_id, f"📸 আপনার বাইনান্স পেমেন্ট (`UID: {bot_config['binance_uid']}`) সফল হওয়ার স্ক্রিনশটটি ছবি হিসেবে চ্যাটে পাঠান।")
+        bot.send_message(chat_id, f"📸 আপনার বাইনান্স পেমেন্ট (`UID: {bot_config['binance_uid']}`) সফল হওয়ার স্ক্রিনশটটি ছবি হিসেবে চ্যাটে পাঠান।")
     
-    elif data == "setup_group_guide":
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🟢 Turn ON", callback_data="react_on"),
-            types.InlineKeyboardButton("⚙️ Set Quantity", callback_data="set_qty")
-        )
-        bot.edit_message_text(
-            "📌 **GROUP SETUP GUIDE:**\n\n"
-            "১. আপনার গ্রুপে আমাদের বটকে **Admin** করুন।\n"
-            "২. নিচের বাটন থেকে রিঅ্যাকশন **ON** করুন এবং পরিমাণ সেট করুন।\n"
-            "ব্যাস! এরপর গ্রুপে যত পোস্ট করবেন, অটো রিঅ্যাকশন চলে যাবে!",
-            chat_id=chat_id, message_id=call.message.message_id, reply_markup=markup
-        )
-    
-    elif data == "react_on":
-        # এখানে বর্তমান চ্যাট বা গ্রুপের জন্য অন করা
-        auto_reaction_status[chat_id] = True
-        bot.answer_callback_query(call.id, "✅ অটো রিঅ্যাকশন চালু করা হয়েছে!", show_alert=True)
-        bot.edit_message_text("🟢 অটো রিঅ্যাকশন বর্তমানে এই চ্যাটে **ON** আছে।", chat_id=chat_id, message_id=call.message.message_id)
-    
-    elif data == "react_off":
-        auto_reaction_status[chat_id] = False
-        bot.answer_callback_query(call.id, "❌ অটো রিঅ্যাকশন বন্ধ করা হয়েছে!", show_alert=True)
-        bot.edit_message_text("🔴 অটো রিঅ্যাকশন বর্তমানে এই চ্যাটে **OFF** আছে।", chat_id=chat_id, message_id=call.message.message_id)
-    
-    elif data == "react_status":
-        status = auto_reaction_status.get(chat_id, False)
-        qty = chat_reaction_quantities.get(chat_id, 100)
-        state_text = "🟢 ON" if status else "🔴 OFF"
-        bot.answer_callback_query(call.id, f"Status: {state_text} | Qty: {qty}", show_alert=True)
-    
-    elif data == "set_qty":
-        waiting_for_quantity[user_id] = chat_id
-        bot.answer_callback_query(call.id, "Enter quantity")
-        bot.send_message(chat_id, "🔢 আপনি প্রতি পোস্টে কতটি রিঅ্যাকশন নিতে চান? সংখ্যাটি লিখে পাঠান (যেমন: `150`):")
-    
-    elif data == "back_home":
-        bot.edit_message_text("💎 **GX TEAM VIP AUTO-REACTION BOT**\n\nমেনু থেকে অপশন সিলেক্ট করুন:", chat_id=chat_id, message_id=call.message.message_id)
+    elif data == "one_click_setup":
+        waiting_for_group_link[user_id] = True
+        bot.answer_callback_query(call.id, "Setup started")
+        bot.send_message(chat_id, "📢 আপনার পাবলিক গ্রুপের লিংক পাঠান (যেমন: `@YourGroupName` বা গ্রুপের লিংক):")
 
 if __name__ == '__main__':
     keep_alive()
