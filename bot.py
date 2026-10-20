@@ -12,14 +12,10 @@ TOKEN = '8328274170:AAFrNNK1tapx67WjaADQUXjmRc9wbPSDZ1w'
 ADMIN_IDS = [8419760844]  # আপনার সঠিক এডমিন আইডি
 LOG_GROUP_ID = -1004452564086
 
-# গ্লোবাল কনফিগারেশন
-bot_config = {
-    "binance_uid": "1122595327",
-    "reaction_service_id": 1936
-}
-
-SMM_API_URL = "https://1xpanel.com/api/v2"
-SMM_API_KEY = "bdbedcf39f36fa030a9d4e56b0e1282e"
+# 1X Panel অফিশিয়াল এপিআই কনফিগারেশন
+API_URL = "https://1xpanel.com/api/v2"
+API_KEY = "bdbedcf39f36fa030a9d4e56b0e1282e"
+REACTION_SERVICE_ID = 1936
 
 bot = telebot.TeleBot(TOKEN, parse_mode='Markdown')
 
@@ -37,7 +33,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "GX Team Auto-Reaction Bot is running 24/7!"
+    return "GX Team 1X Panel SMM Bot is running 24/7!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -47,16 +43,13 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-def send_smm_order(post_link, quantity):
+# অফিশিয়াল পাইথন এপিআই কানেক্টর (পিএইচপি কোডের পাইথন ভার্সন)
+def call_1xpanel_api(data):
     try:
-        payload = {
-            'key': SMM_API_KEY,
-            'action': 'add',
-            'service': bot_config["reaction_service_id"],
-            'link': post_link,
-            'quantity': quantity
-        }
-        response = requests.post(SMM_API_URL, data=payload, timeout=15)
+        post_data = {'key': API_KEY}
+        post_data.update(data)
+        
+        response = requests.post(API_URL, data=post_data, timeout=15)
         return response.json()
     except Exception as e:
         return {'error': str(e)}
@@ -94,13 +87,13 @@ def send_welcome(message):
     if user_id in ADMIN_IDS:
         bot.send_message(
             message.chat.id, 
-            "👑 **WELCOME ADMIN (নিরব ভাই)**\n\nআপনার ফুল অটো-রিঅ্যাকশন প্যানেল বট ফুল্লি লাইভ আছে!", 
+            "👑 **WELCOME ADMIN (নিরব ভাই)**\n\nআপনার 1X Panel অটো-রিঅ্যাকশন বট ফুল্লি লাইভ আছে!", 
             reply_markup=admin_main_keyboard()
         )
     else:
         bot.send_message(
             message.chat.id, 
-            "💎 **GX TEAM VIP AUTO-REACTION PANEL**\n\n"
+            "💎 **GX TEAM 1X PANEL VIP REACTION**\n\n"
             "স্বাগতম! নিচের মেনু থেকে অটো-রিঅ্যাকশন সেটআপ করুন:", 
             reply_markup=user_main_keyboard()
         )
@@ -146,14 +139,11 @@ def handle_all_incoming(message):
     if user_id in banned_users:
         return
 
-    # ১. গ্রুপে নতুন পোস্ট আসলে অটো রিঅ্যাকশন পাঠানোর লজিক ও কয়েন কাটার সিস্টেম
+    # ১. গ্রুপে নতুন পোস্ট আসলে 1X Panel API-তে অর্ডার পাঠানোর লজিক
     if message.chat.type in ['group', 'supergroup']:
         chat_id = message.chat.id
         if chat_id in group_setups and group_setups[chat_id].get("active", False):
             quantity = group_setups[chat_id].get("qty", 1000)
-            
-            # কয়েন হিসাব (যেমন: ১০০০ রিঅ্যাকশনের দাম ১০০ কয়েন, ৫০০০ এর দাম ২০০ কয়েন)
-            required_coins = 100 if quantity <= 1000 else 200
 
             # পোস্টের পারফেক্ট লিংক তৈরি
             if message.chat.username:
@@ -161,27 +151,27 @@ def handle_all_incoming(message):
             else:
                 post_link = f"https://t.me/c/{str(chat_id).replace('-100', '')}/{message.message_id}"
             
-            # এপিআই অর্ডারে পাঠানো
-            api_response = send_smm_order(post_link, quantity)
+            # 1X Panel API Call (`action: add`)
+            api_response = call_1xpanel_api({
+                'action': 'add',
+                'service': REACTION_SERVICE_ID,
+                'link': post_link,
+                'quantity': quantity
+            })
             total_orders_count += 1
 
             try:
-                if 'order' in api_response:
-                    bot.send_message(LOG_GROUP_ID, f"🎉 **1X PANEL ORDER COMPLETED!**\nOrder ID: `{api_response['order']}`\nGroup: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
+                if isinstance(api_response, dict) and 'order' in api_response:
+                    order_id = api_response['order']
+                    bot.send_message(LOG_GROUP_ID, f"🎉 **1X PANEL ORDER COMPLETED!**\nOrder ID: `{order_id}`\nGroup ID: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
                 else:
-                    bot.send_message(LOG_GROUP_ID, f"⚠️ **1X PANEL ORDER FAILED**\nReason: `{api_response.get('error', 'Unknown')}`\nGroup: `{chat_id}`")
-            except:
-                pass
+                    err_msg = api_response.get('error', 'Unknown Error') if isinstance(api_response, dict) else 'API Response Error'
+                    bot.send_message(LOG_GROUP_ID, f"⚠️ **1X PANEL ORDER FAILED**\nReason: `{err_msg}`\nGroup ID: `{chat_id}`")
+            except Exception as e:
+                print(f"Log group error: {e}")
         return
 
     text = message.text if message.text else ""
-
-    # অ্যাডমিন বাইনান্স ইউআইডি পরিবর্তন
-    if user_id in ADMIN_IDS and waiting_for_binance_change.get(user_id, False):
-        bot_config["binance_uid"] = text.strip()
-        waiting_for_binance_change[user_id] = False
-        bot.reply_to(message, f"✅ সফলভাবে বাইনান্স ইউআইডি পরিবর্তন করে রাখা হলো: `{bot_config['binance_uid']}`")
-        return
 
     # পেমেন্ট স্ক্রিনশট আপলোড
     if user_id in waiting_for_screenshot and waiting_for_screenshot[user_id]:
@@ -215,7 +205,7 @@ def handle_all_incoming(message):
         waiting_for_group_link[user_id] = False
         waiting_for_group_qty[user_id] = group_link
 
-        bot.reply_to(message, "🔢 আপনি প্রতি পোস্টে কত রিঅ্যাকশন নিতে চান? (যেমন: `1000` রিঅ্যাকশনের দাম ১০০ কয়েন, `5000` রিঅ্যাকশনের দাম ২০০ কয়েন)। সংখ্যাটি লিখে পাঠান:")
+        bot.reply_to(message, "🔢 আপনি প্রতি পোস্টে কত রিঅ্যাকশন নিতে চান? (যেমন: `1000` বা `5000`) সংখ্যাটি লিখে পাঠান:")
         return
 
     # রিঅ্যাকশন পরিমাণ ইনপুট হ্যান্ডলিং (সেটআপ সম্পন্ন)
@@ -225,7 +215,7 @@ def handle_all_incoming(message):
             group_link = waiting_for_group_qty[user_id]
             waiting_for_group_qty[user_id] = None
 
-            # গ্রুপ চ্যাট আইডি বা ডেমো হিসেবেভরে দেওয়া
+            # গ্রুপ চ্যাট আইডি সেটআপ
             group_setups[message.chat.id] = {"qty": qty, "active": True}
 
             bot.reply_to(
@@ -251,7 +241,7 @@ def handle_all_incoming(message):
         topup_text = (
             f"💳 **BINANCE PAY TOPUP SYSTEM**\n\n"
             f"কয়েন টপ আপ করতে নিচের বাইন্যান্স আইডিতে ডলার পাঠান:\n\n"
-            f"🔹 **Binance UID:** `{bot_config['binance_uid']}`\n"
+            f"🔹 **Binance UID:** `1122595327`\n"
             f"🔹 **Rate:** `1 USD = 5000 Coins`\n\n"
             f"ডলার পাঠানোর পর সফল পেমেন্টের স্ক্রিনশট দিতে নিচের বাটনে ক্লিক করুন:"
         )
@@ -271,21 +261,17 @@ def handle_all_incoming(message):
         )
     
     elif text == '⚙️ Admin Dashboard' and user_id in ADMIN_IDS:
-        bot.reply_to(message, f"👑 **ADMIN PANEL**\n\n📊 Total Orders: `{total_orders_count}`\n👥 Total Users: `{len(user_coins)}`\n💳 Current Binance UID: `{bot_config['binance_uid']}`", reply_markup=admin_main_keyboard())
+        bot.reply_to(message, f"👑 **ADMIN PANEL**\n\n📊 Total Orders: `{total_orders_count}`\n👥 Total Users: `{len(user_coins)}`\n🌐 API URL: `{API_URL}`", reply_markup=admin_main_keyboard())
     
     elif text == '👥 All Users List' and user_id in ADMIN_IDS:
         users_list = "\n".join([f"👤 ID: `{uid}` | Coins: `{coins}`" for uid, coins in user_coins.items()])
         bot.reply_to(message, f"👥 **REGISTERED USERS:**\n\n{users_list if users_list else 'কোনো ইউজার নেই।'}")
     
-    elif text == '💳 Change Binance UID' and user_id in ADMIN_IDS:
-        waiting_for_binance_change[user_id] = True
-        bot.reply_to(message, f"💳 বর্তমান বাইনান্স ইউআইডি: `{bot_config['binance_uid']}`\n\nনতুন বাইনান্স ইউআইডি লিখে পাঠান:")
-    
     elif text == '📢 Broadcast Message' and user_id in ADMIN_IDS:
         bot.reply_to(message, "📢 ব্রডকাস্ট করতে মেসেজটি লিখে পাঠান:")
     
     else:
-        bot.reply_to(message, "❓ দুঃখিত, আমি আপনার কথা বুঝতে পারিনি। নিচের মেনু থেকে সঠিক অপশনটি সিলেক্ট করুন.", reply_markup=user_main_keyboard())
+        bot.reply_to(message, "❓ দুঃখিত, আমি আপনার কথা বুঝতে পারিনি। নিচের মেনু থেকে সঠিক অপশনটি সিলেক্ট করুন।", reply_markup=user_main_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handlers(call):
@@ -296,7 +282,7 @@ def callback_handlers(call):
     if data == "send_screenshot":
         waiting_for_screenshot[user_id] = True
         bot.answer_callback_query(call.id, "Send screenshot")
-        bot.send_message(chat_id, f"📸 আপনার বাইনান্স পেমেন্ট (`UID: {bot_config['binance_uid']}`) সফল হওয়ার স্ক্রিনশটটি ছবি হিসেবে চ্যাটে পাঠান।")
+        bot.send_message(chat_id, "📸 আপনার বাইনান্স পেমেন্ট (`UID: 1122595327`) সফল হওয়ার স্ক্রিনশটটি ছবি হিসেবে চ্যাটে পাঠান।")
     
     elif data == "one_click_setup":
         waiting_for_group_link[user_id] = True
@@ -305,6 +291,6 @@ def callback_handlers(call):
 
 if __name__ == '__main__':
     keep_alive()
-    print("SMM VIP Reaction Bot is running 24/7...")
+    print("1X Panel SMM VIP Reaction Bot is running 24/7...")
     bot.remove_webhook()
     bot.infinity_polling(skip_pending=True)
