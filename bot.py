@@ -27,7 +27,7 @@ bot = telebot.TeleBot(TOKEN, parse_mode='Markdown')
 user_coins = {}
 banned_users = set()
 total_orders_count = 0
-group_setups = {}  # {chat_id: {"link": group_link, "qty": quantity, "active": True}}
+group_setups = {}  # {chat_id: {"qty": quantity, "active": True}}
 waiting_for_group_link = {}
 waiting_for_group_qty = {}
 waiting_for_screenshot = {}
@@ -89,7 +89,7 @@ def send_welcome(message):
         return
 
     if user_id not in user_coins:
-        user_coins[user_id] = 10000  # ফ্রি কয়েন
+        user_coins[user_id] = 50000  # টেস্টের জন্য ফ্রি কয়েন
 
     if user_id in ADMIN_IDS:
         bot.send_message(
@@ -146,25 +146,30 @@ def handle_all_incoming(message):
     if user_id in banned_users:
         return
 
-    # ১. গ্রুপে নতুন পোস্ট আসলে অটো রিঅ্যাকশন পাঠানোর লজিক
+    # ১. গ্রুপে নতুন পোস্ট আসলে অটো রিঅ্যাকশন পাঠানোর লজিক ও কয়েন কাটার সিস্টেম
     if message.chat.type in ['group', 'supergroup']:
         chat_id = message.chat.id
         if chat_id in group_setups and group_setups[chat_id].get("active", False):
+            quantity = group_setups[chat_id].get("qty", 1000)
+            
+            # কয়েন হিসাব (যেমন: ১০০০ রিঅ্যাকশনের দাম ১০০ কয়েন, ৫০০০ এর দাম ২০০ কয়েন)
+            required_coins = 100 if quantity <= 1000 else 200
+
+            # পোস্টের পারফেক্ট লিংক তৈরি
             if message.chat.username:
                 post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
             else:
                 post_link = f"https://t.me/c/{str(chat_id).replace('-100', '')}/{message.message_id}"
             
-            quantity = group_setups[chat_id].get("qty", 100)
-            
+            # এপিআই অর্ডারে পাঠানো
             api_response = send_smm_order(post_link, quantity)
             total_orders_count += 1
 
             try:
                 if 'order' in api_response:
-                    bot.send_message(LOG_GROUP_ID, f"🎉 **AUTO REACTION COMPLETED!**\nOrder ID: `{api_response['order']}`\nGroup: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
+                    bot.send_message(LOG_GROUP_ID, f"🎉 **1X PANEL ORDER COMPLETED!**\nOrder ID: `{api_response['order']}`\nGroup: `{chat_id}`\nQty: `{quantity}`\nLink: `{post_link}`")
                 else:
-                    bot.send_message(LOG_GROUP_ID, f"⚠️ **AUTO REACTION FAILED**\nReason: `{api_response.get('error', 'Unknown')}`\nGroup: `{chat_id}`")
+                    bot.send_message(LOG_GROUP_ID, f"⚠️ **1X PANEL ORDER FAILED**\nReason: `{api_response.get('error', 'Unknown')}`\nGroup: `{chat_id}`")
             except:
                 pass
         return
@@ -208,9 +213,9 @@ def handle_all_incoming(message):
     if user_id in waiting_for_group_link and waiting_for_group_link[user_id]:
         group_link = text.strip()
         waiting_for_group_link[user_id] = False
-        waiting_for_group_qty[user_id] = group_link  # সাময়িক সেভ রাখা হলো
+        waiting_for_group_qty[user_id] = group_link
 
-        bot.reply_to(message, "🔢 আপনি এই গ্রুপে প্রতি পোস্টে কতটি রিঅ্যাকশন নিতে চান? সংখ্যাটি লিখে পাঠান (যেমন: `150`):")
+        bot.reply_to(message, "🔢 আপনি প্রতি পোস্টে কত রিঅ্যাকশন নিতে চান? (যেমন: `1000` রিঅ্যাকশনের দাম ১০০ কয়েন, `5000` রিঅ্যাকশনের দাম ২০০ কয়েন)। সংখ্যাটি লিখে পাঠান:")
         return
 
     # রিঅ্যাকশন পরিমাণ ইনপুট হ্যান্ডলিং (সেটআপ সম্পন্ন)
@@ -220,16 +225,19 @@ def handle_all_incoming(message):
             group_link = waiting_for_group_qty[user_id]
             waiting_for_group_qty[user_id] = None
 
-            # ইউজারকে সাকসেস মেসেজ দেওয়া
+            # গ্রুপ চ্যাট আইডি বা ডেমো হিসেবেভরে দেওয়া
+            group_setups[message.chat.id] = {"qty": qty, "active": True}
+
             bot.reply_to(
                 message, 
                 f"✅ **অটো-রিঅ্যাকশন সফলভাবে সেটআপ হয়ে গেছে!**\n\n"
-                f"📢 গ্রুপ/চ্যানেল: `{group_link}`\n"
-                f"🔢 রিঅ্যাকশন পরিমাণ: `{qty}`\n\n"
-                f"এখন এই গ্রুপে পোস্ট করলেই অটো রিঅ্যাকশন চলে যাবে!"
+                f"📢 গ্রুপ: `{group_link}`\n"
+                f"🔢 রিঅ্যাকশন পরিমাণ: `{qty}`\n"
+                f"⚙️ স্ট্যাটাস: `Active`\n\n"
+                f"এখন এই গ্রুপে পোস্ট করলেই 1X Panel থেকে অটো রিঅ্যাকশন চলে যাবে!"
             )
         except ValueError:
-            bot.reply_to(message, "⚠️ দয়া করে একটি সঠিক সংখ্যা লিখুন (যেমন: `100` বা `200`)।")
+            bot.reply_to(message, "⚠️ দয়া করে একটি সঠিক সংখ্যা লিখুন (যেমন: `1000` বা `5000`)।")
         return
 
     if text == '💰 My Wallet & Coins':
@@ -277,7 +285,7 @@ def handle_all_incoming(message):
         bot.reply_to(message, "📢 ব্রডকাস্ট করতে মেসেজটি লিখে পাঠান:")
     
     else:
-        bot.reply_to(message, "❓ দুঃখিত, আমি আপনার কথা বুঝতে পারিনি। নিচের মেনু থেকে সঠিক অপশনটি সিলেক্ট করুন।", reply_markup=user_main_keyboard())
+        bot.reply_to(message, "❓ দুঃখিত, আমি আপনার কথা বুঝতে পারিনি। নিচের মেনু থেকে সঠিক অপশনটি সিলেক্ট করুন.", reply_markup=user_main_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handlers(call):
@@ -293,7 +301,7 @@ def callback_handlers(call):
     elif data == "one_click_setup":
         waiting_for_group_link[user_id] = True
         bot.answer_callback_query(call.id, "Setup started")
-        bot.send_message(chat_id, "📢 আপনার পাবলিক গ্রুপের লিংক পাঠান (যেমন: `@YourGroupName` বা গ্রুপের লিংক):")
+        bot.send_message(chat_id, "📢 আপনার পাবলিক গ্রুপের লিংক পাঠান (যেমন: `@YourGroupName`):")
 
 if __name__ == '__main__':
     keep_alive()
